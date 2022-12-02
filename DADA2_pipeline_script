@@ -1,0 +1,224 @@
+getwd()
+# set working directory
+setwd("C:/Users/Alvaro De la Mora P/Documents/UofG_PhD/Courses/ENVS6452-02 ST. Env. Sci Bioinformatics/Assignments/Assignment3")
+getwd()
+# call ggplot, dada2 and gg
+library(ggplot2)
+library(dada2)
+library(phyloseq)
+# load the fastq file into an object called path and confirm that your fastq files are loaded listing the files
+path <- "C:/Users/Alvaro De la Mora P/Documents/UofG_PhD/Courses/ENVS6452-02 ST. Env. Sci Bioinformatics/Assignments/Assignment3/Assigment3_ASV"
+list.files(path)
+# set an object for the fwd and rv reads
+fnFs <- sort(list.files(path, pattern = "_R1_001.fastq", full.names = TRUE))
+head(fnFs)
+fnRs <- sort(list.files(path, pattern = "_R2_001.fastq", full.names = TRUE))
+head(fnRs)
+# Extract sample names
+sample.names <- sapply(strsplit(basename(fnFs), "_"), '[', 1)
+# Inspect read quality profiles for the Fwd and Rv reads
+plotQualityProfile(fnFs[1:2]) #quality of fwd reads is not the best at the end, suggesting to trim in position 280
+plotQualityProfile(fnRs[1:2])#quality of rv reads looks better, but neg looks wost suggesting trimming in position 210
+# Sequences will be filtered (fwd in 280 and rv in 210 positions) and placed in a subdirectory
+filtFs <- file.path(path, "filtered", paste0(sample.names, "_F_filt.fastq.gz"))
+filtRs <- file.path(path, "filtered", paste0(sample.names, "_R_filt.fastq.gz"))
+# Trim the reads, you can remove primers using trimLeft=c(18,20)
+out <- filterAndTrim(fnFs, filtFs, fnRs, filtRs, truncLen = c(280, 260),
+                     maxN = 0, maxEE = c(2,2), truncQ = 2, trimLeft = c(18,20), rm.phix = TRUE,
+                     compress = TRUE, multithread = FALSE)
+head #fwd reads.in for P1 = 291, and out 257,949. And for Wneg in=415, out=226
+
+# Dereplicate the reads and name them
+derepFs <- derepFastq(filtFs, verbose = TRUE) #For P1,Encountered 38,786 unique sequences from 257,949 total sequences read.
+                                              #For Wneg, Encountered 141 unique sequences from 226 total sequences read.
+derepRs <- derepFastq(filtRs, verbose = TRUE) #For P1, Encountered 31,848 unique sequences from 257,949 total sequences read.
+                                              #For Wneg, Encountered 115 unique sequences from 226 total sequences read.
+
+#name the derep-class objects by the sample names
+names(derepFs) <- sample.names
+names(derepRs) <- sample.names
+
+#Get error rates
+errF <- learnErrors(filtFs, multithread = FALSE) # 67,641,850 total bases in 258,175 reads from 2 samples
+errR <- learnErrors(filtRs, multithread = FALSE) # 49,053,250 total bases in 258,175 reads from 2 samples
+#plot errors
+plotErrors(errF, nominalQ = TRUE)
+
+#remove dereplicated amplicons and sequencing errors
+?dada
+dadaFs <- dada(derepFs, err = errF,multithread = FALSE) #Sample 1 - 257,949 reads in 38,786 unique sequences.
+                                                        #Sample 2 - 226 reads in 141 unique sequences.
+dadaRs <- dada(derepRs, err = errR, multithread = FALSE) #Sample 1 - 257,949 reads in 31,848 unique sequences.
+                                                         #Sample 2 - 226 reads in 115 unique sequences.
+dadaFs[[1]] #1840 sequence variants were inferred from 38786 input unique sequences.
+dadaRs[[1]] #1466 sequence variants were inferred from 31848 input unique sequences.
+
+# Merge fwd and rv  reads
+mergers <- mergePairs(dadaFs, filtFs, dadaRs, filtRs, verbose = TRUE) #246,155 paired-reads (in 2,668 unique pairings) successfully merged out of 253,506 (in 5,378 pairings) input.
+                                                                      #182 paired-reads (in 9 unique pairings) successfully merged out of 182 (in 9 pairings) input.
+#Inspect the merger dara.frame
+head(mergers[[1]])
+
+# Construct sequence table of mergers
+seqtab <- makeSequenceTable(mergers)
+dim(seqtab) #2 samples, 2,667 ASVs
+# Inspect distribution of sequence lengths
+table(nchar(getSequences(seqtab)))
+
+#Remove chimeras.
+seqtab.nochim <- removeBimeraDenovo(seqtab, method = "consensus", multithread = FALSE, verbose = TRUE) #Identified 1,207 bimeras out of 2,677 input sequences.
+dim(seqtab.nochim) #2 samples; 1,470 ASVs without chimeras
+sum(seqtab.nochim)/sum(seqtab) #Proportion of nochims reads was 0.9312852
+# Table with ASV seq and the counts of how many times it occurred? Transposes the seqtab.nochim ASVs as raws and samples as headers
+flipped_seqtab.nochim <- as.data.frame(t(seqtab.nochim))
+# Look at the reads made with the pipeline
+getN <- function(x) sum(getUniques(x))
+track <- cbind(out, sapply(dadaFs, getN), sapply(dadaRs, getN), sapply(mergers, getN), rowSums(seqtab.nochim))
+colnames(track) <- c("input", "filtered", "denoisedF", "denoisedR", "merged", "nonchim")
+rownames(track) <- sample.names
+head(track)
+
+#Assign taxonomy finally, download silva in this link: https://benjjneb.github.io/dada2/training.html, and copy the files in the rigth directory
+taxa <- assignTaxonomy(seqtab.nochim, "C:/Users/Alvaro De la Mora P/Documents/UofG_PhD/Courses/ENVS6452-02 ST. Env. Sci Bioinformatics/Assignments/Assignment3/Assigment3_ASV/silva_nr99_v138.1_train_set.fa.gz", multithread = FALSE)
+list()
+#add additional species
+taxa <- addSpecies(taxa, "C:/Users/Alvaro De la Mora P/Documents/UofG_PhD/Courses/ENVS6452-02 ST. Env. Sci Bioinformatics/Assignments/Assignment3/Assigment3_ASV/silva_species_assignment_v138.1.fa.gz")
+#inspect taxonomic assignments, removing sequence rownames for display only
+taxa.print <- taxa
+rownames(taxa.print) <- NULL
+head(taxa.print)
+
+#Saving taxa output as a CSV file
+write.csv(taxa, file = "C:/Users/Alvaro De la Mora P/Documents/UofG_PhD/Courses/ENVS6452-02 ST. Env. Sci Bioinformatics/Assignments/Assignment3/Assigment3_ASV/Assignment3_Pumice_Rock_taxa.csv")
+#Saving seqtab without chimeras as a CSV file
+write.csv(seqtab.nochim, file = "C:/Users/Alvaro De la Mora P/Documents/UofG_PhD/Courses/ENVS6452-02 ST. Env. Sci Bioinformatics/Assignments/Assignment3/Assigment3_ASV/Assignment3_Pumice_Rock_seqtab.nochim.csv")
+#Saving transposed seqtab.nochim as a CSV file
+write.csv(flipped_seqtab.nochim, file = "C:/Users/Alvaro De la Mora P/Documents/UofG_PhD/Courses/ENVS6452-02 ST. Env. Sci Bioinformatics/Assignments/Assignment3/Assigment3_ASV/Assignment3_Pumice_Rock_flipped_seqtab.nochim.csv")
+
+#put your ASV sequences and the count in one sheet
+OTUabund <- cbind(flipped_seqtab.nochim, taxa)
+write.csv(OTUabund, file = "C:/Users/Alvaro De la Mora P/Documents/UofG_PhD/Courses/ENVS6452-02 ST. Env. Sci Bioinformatics/Assignments/Assignment3/Assigment3_ASV/Assignment3_Pumice_Rock_OTUaund.csv")
+
+list.files(path)
+library(phyloseq); packageVersion("phyloseq")
+library(Biostrings); packageVersion("Biostrings")
+
+#Construct a dataframe from our file names:
+samples.out <- row.names(seqtab.nochim)
+samdf <- data.frame(samples.out)
+row.names(samdf) <- samples.out
+ps <- phyloseq(otu_table(seqtab.nochim, taxa_are_rows = FALSE),
+               sample_data(samdf),
+               tax_table(taxa))
+ps
+    #OTU Table: [ 1470 taxa and 2 samples ]
+    #Sample Data: [ 2 samples by 1 sample variables ]
+    #Taxonomy Table:[ 1470 taxa by 7 taxonomic ranks ]
+
+#table with ASV
+dna <- Biostrings::DNAStringSet(taxa_names(ps))
+names(dna) <- taxa_names(ps)
+ps <- merge_phyloseq(ps, dna)
+taxa_names(ps) <- paste0("ASV", seq(ntaxa(ps)))
+ps
+  # OTU Table: [1470 taxa and 2 samples ]
+  # Sample Data: [2 samples by 1 sample variables ]
+  # Taxonomy Table: [1470 taxa by 7 taxonomic ranks ]
+  # DNAStringSet: [1470 reference sequences ]
+
+#plot of absolute abundance, not relative
+plot_bar(ps)
+#plot changing the color by Phylum
+plot_bar(ps, fill = "Phylum")
+#to get rid of the linde that separate (geom_bar)
+p=plot_bar(ps)
+p + geom_bar(aes(fill=Phylum), stat="identity", position="stack")
+
+#to get RELATIVE ABUNDANCE, we have to divide the number of read by axa, by the total taxa, by the total taxa in that in that sample typically
+relative <- transform_sample_counts(ps, function(OTU) OTU/sum(OTU))
+relative
+#Plot relative abundance by phylum
+Phylum_graph <- plot_bar(relative, fill="Phylum") + ylab("Relative Abundance") 
+Phylum_graph
+#remove the lines by using geom_bar
+Phylum_graph + geom_bar(aes(fill=Phylum), stat = "identity", position = "stack")
+
+##### get RELATIVE ABUNDANCE of ORDER 1
+#plot changing the color by Order
+plot_bar(ps, fill = "Order")
+#to get rid of the linde that separate (geom_bar)
+p=plot_bar(ps)
+p + geom_bar(aes(fill=Order), stat="identity", position="stack")
+#to get RELATIVE ABUNDANCE, we have to divide the number of read by axa, by the total taxa, by the total taxa in that in that sample typically
+relative <- transform_sample_counts(ps, function(OTU) OTU/sum(OTU))
+relative
+#Plot relative abundance by phylum
+Order_graph <- plot_bar(relative, fill="Order") + ylab("Relative Abundance") 
+Order_graph
+#remove the lines by using geom_bar
+Order_graph + geom_bar(aes(fill=Order), stat = "identity", position = "stack")
+
+#Save as RDS
+saveRDS(ps, "ps.rds")
+
+#graphing by editing font of relative abundance of Phylum
+ps_phylum <- tax_glom(ps, "Phylum")
+ps1_phylum_relabun <- transform_sample_counts(ps_phylum, function(ASV) ASV/sum(ASV))
+taxa_abundance_table_phylum <- psmelt(ps1_phylum_relabun)
+taxa_abundance_table_phylum$Phylum<-factor(taxa_abundance_table_phylum$Phylum)
+
+#change font and edit plot for Phylum
+ggplot(data=taxa_abundance_table_phylum,mapping=aes(x=Sample,y=Abundance*100,))+geom_col(position="stack", stat="identity")+aes(fill=Phylum)+ 
+  theme_bw()+theme(panel.grid.major = element_blank(), panel.grid.minor = element_blank()) +
+  labs(x="Samples", y="Phylum Relative Abundance (%)", size = "Relative Abundance(%)")  + 
+  theme(axis.text.x = element_text(face="plain", color="Black", size=10, angle=90),
+        axis.title.x = element_blank(),
+        axis.ticks.x=element_blank(), #tickmark aesthetics
+        axis.text.y = element_text(face="bold", color="Black", size=10, angle=0)) 
+
+#change graph for points and remove zeros
+taxa_abundance_table_phylum[taxa_abundance_table_phylum == 0] <- NA
+ggplot(data=taxa_abundance_table_phylum,mapping=aes(x=Sample,y=Phylum ))+geom_point(scales="free_x")+(aes(size = Abundance,colour=Phylum))+ggtitle("Pumice")+scale_size_area()+ 
+  theme_bw()+theme(panel.grid.major = element_blank(), panel.grid.minor = element_blank()) +
+  labs(x="Samples", y="Phylum Relative Abundance (%)", size = "Relative Abundance(%)")  + 
+  theme(axis.text.x = element_text(face="plain", color="Black", size=8, angle=90),
+        axis.title.x = element_blank(),
+        axis.ticks.x=element_blank(), #tickmark aesthetics
+        axis.text.y = element_text(face="bold", color="Black", size=6, angle=0)) 
+
+#make axis smaller and call it
+ggplot(data=taxa_abundance_table_phylum,mapping=aes(x=Sample,y=Phylum ))+geom_point(scales="free_x")+(aes(size = Abundance,colour=Phylum))+ggtitle("Permafrost microbiota ")+scale_size_area()+ 
+  theme_bw()+theme(panel.grid.major = element_blank(), panel.grid.minor = element_blank()) +
+  labs(x="Samples", y="Phylum Relative Abundance (%)", size = "Relative Abundance(%)")  + 
+  theme(axis.text.x = element_text(face="plain", color="Black", size=10, angle=90),
+        axis.title.x = element_blank(),
+        axis.ticks.x=element_blank(), #tickmark aesthetics
+        axis.text.y = element_text(face="bold", color="Black", size=10, angle=0)) 
+
+####graphing by editing font of relative abundance of ORDER 2
+ps_order <- tax_glom(ps, "Order")
+ps1_order_relabun <- transform_sample_counts(ps_order, function(ASV) ASV/sum(ASV))
+taxa_abundance_table_order <- psmelt(ps1_order_relabun)
+taxa_abundance_table_order$Order <- factor(taxa_abundance_table_order$Order)
+#change font and edit plot for Order
+ggplot(data=taxa_abundance_table_order, mapping=aes(x=Sample,y=Order,))+geom_col(position="stack", stat="identity")+aes(fill=Order)+ 
+  theme_bw()+theme(panel.grid.major = element_blank(), panel.grid.minor = element_blank()) +
+  labs(x="Samples", y="Order Relative Abundance (%)", size = "Relative Abundance(%)")  + 
+  theme(axis.text.x = element_text(face="plain", color="Black", size=10, angle=90),
+        axis.title.x = element_blank(),
+        axis.ticks.x=element_blank(), #tickmark aesthetics
+        axis.text.y = element_text(face="bold", color="Black", size=10, angle=0)) 
+#change the graph for points
+#change font and edit plot for Order
+taxa_abundance_table_order[taxa_abundance_table_order == 0] <- NA
+ggplot(data=taxa_abundance_table_order,mapping=aes(x=Sample,y=Order ))+geom_point(scales="free_x")+(aes(size = Abundance,colour=Order))+ggtitle("Pumice")+scale_size_area()+ 
+  theme_bw()+theme(panel.grid.major = element_blank(), panel.grid.minor = element_blank()) +
+  labs(x="Samples", y="Order Relative Abundance (%)", size = "Relative Abundance(%)")  + 
+  theme(axis.text.x = element_text(face="plain", color="Black", size=8, angle=90),
+        axis.title.x = element_blank(),
+        axis.ticks.x=element_blank(), #tickmark aesthetics
+        axis.text.y = element_text(face="bold", color="Black", size=6, angle=0)) 
+
+#Save as RDS
+saveRDS(ps, "ps.rds")
+
