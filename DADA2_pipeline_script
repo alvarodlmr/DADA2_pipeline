@@ -1,4 +1,3 @@
-getwd()
 # set working directory
 setwd("C:/Users/Alvaro De la Mora P/Documents/UofG_PhD/Courses/ENVS6452-02 ST. Env. Sci Bioinformatics/Assignments/Assignment3")
 getwd()
